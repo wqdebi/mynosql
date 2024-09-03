@@ -149,7 +149,7 @@ list *listAddNodeTail(list *list, void *value)
 
 void listDelNode(list *list, listNode *node)
 {
-    if (node->prev)//判断删除节点是不是第一个节点
+    if (node->prev)//判断删除节点是不是第一个节点 如果不是
         node->prev->next = node->next;
     else
         list->head = node->next;
@@ -332,7 +332,7 @@ list *listDup(list *orig)
  * NULL is returned. */
 
  /*
-  * 返回鲢表中第一个匹配key元素的值
+  * 返回链表中第一个匹配key元素的值
   * 如果链表中不存在该元素，则返回NULL
   * 时间复杂度为o(N)
   */

@@ -141,7 +141,7 @@ int _dictInit(dict *ht, dictType *type,
 /**
  * DICT_HT_INITIAL_SIZE=4表示的是Hash表的初始大小
  * 重新调整Hash表的大小
- * 从这里可以看出Hash表的最小的大注为4
+ * 从这里可以看出Hash表的最小为4
  */
 int dictResize(dict *ht)
 {
@@ -159,6 +159,7 @@ int dictResize(dict *ht)
 int dictExpand(dict *ht, unsigned long size)
 {
     dict n; /* the new hashtable */
+    int i;
     //重设Hash表的大小，大小为2的指数
     unsigned long realsize = _dictNextPower(size);
 
@@ -212,6 +213,8 @@ int dictExpand(dict *ht, unsigned long size)
  
     /* Remap the new hashtable in the old */
     //将新Hash表作为值进行赋值
+    //注意虽然n会被释放，但是使用的*ht=n，ht是动态分配的，然后将
+    //n拷贝过去了，
     *ht = n;
     //返回创建成功
     return DICT_OK;

@@ -1,32 +1,3 @@
-/*
- * Copyright (c) 2006-2009, Salvatore Sanfilippo <antirez at gmail dot com>
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #define REDIS_VERSION "1.000"
 
 #include "fmacros.h"
@@ -181,15 +152,17 @@
 /*================================= Data types ============================== */
 
 /* A redis object, that is a type able to hold a string / list / set */
+//redis对象，这是一种能够容纳字符串/列表/集合的类型
 typedef struct redisObject {
     void *ptr;
     int type;
     int refcount;
 } robj;
 
+//结构体是用来表示一个数据库实例的。Redis支持多个数据库。
 typedef struct redisDb {
-    dict *dict;
-    dict *expires;
+    dict *dict;//存储数据库中的所有键值对。
+    dict *expires;//存储设置了过期时间的键
     int id;
 } redisDb;
 
@@ -197,21 +170,40 @@ typedef struct redisDb {
  * Clients are taken in a liked list. */
 typedef struct redisClient {
     int fd;
+    //指向当前选中的 redisDb 数据库的指针。
+    //Redis 支持多数据库，但客户端在同一时间只能操作一个数据库。这个指针就是用来指向当前客户端正在操作的那个数据库。
     redisDb *db;
+    //当前客户端选中的数据库 ID。虽然 db 指针已经指向了当前数据库，但有时候直接通过 ID 来引用数据库也是方便的。
     int dictid;
+    //用于存储客户端发送的查询命令的缓冲区。
     sds querybuf;
+    //指向命令参数数组的指针。当 Redis 解析了客户端发送的命令后，它会将命令的参数存储在这个数组中。
     robj **argv;
+    //命令参数的数量。这个值等于 argv 数组的长度。
     int argc;
+    //如果客户端正在执行批量读取操作（如 GET 命令读取大量数据），
+    //这个字段会存储需要读取的数据长度。如果不是批量读取模式，则这个值为 -1
     int bulklen;            /* bulk read len. -1 if not in bulk read mode */
+    //指向回复队列的指针。Redis 会将命令的回复添加到这个队列中，然后通过套接字发送给客户端。
     list *reply;
+    //已经发送给客户端的回复字节数。这个值用于跟踪回复的发送进度，特别是在处理大回复时。
     int sentlen;
+    //上次与客户端交互的时间戳。这个值用于实现客户端超时机制，如果客户端在一定时间内没有与服务器交互，服务器可能会关闭这个连接。
     time_t lastinteraction; /* time of the last interaction, used for timeout */
+    //标志位字段，用于存储关于客户端的各种状态信息。例如，REDIS_CLOSE 表示这个连接应该被关闭，
+    //REDIS_SLAVE 表示这个客户端是一个从服务器（slave），REDIS_MONITOR 表示这个客户端正在监视（monitor）服务器上的操作。
     int flags;              /* REDIS_CLOSE | REDIS_SLAVE | REDIS_MONITOR */
+    //如果这个客户端是一个从服务器，这个字段存储了它选择的数据库 ID。这个值在主从复制过程中用于同步数据。
     int slaveseldb;         /* slave selected db, if this client is a slave */
+    //认证标志位。如果 Redis 设置了密码（requirepass），则客户端在连接后必须进行认证。
     int authenticated;      /* when requirepass is non-NULL */
+    //如果这个客户端是一个从服务器，这个字段将存储其复制状态
     int replstate;          /* replication state if this is a slave */
+    //复制数据库文件描述符。
     int repldbfd;           /* replication DB file descriptor */
+    //复制数据库文件的当前偏移量。在从服务器读取主服务器发送的数据时，这个值会不断更新，以指示已经读取了多少数据。
     long repldboff;          /* replication DB file offset */
+    //复制数据库文件的大小。这个值用于在从服务器启动复制过程时，确定需要下载多少数据。
     off_t repldbsize;       /* replication DB file size */
 } redisClient;
 
@@ -222,48 +214,62 @@ struct saveparam {
 
 /* Global server state structure */
 struct redisServer {
+    //服务器监听的端口号。
     int port;
+    //服务器套接字的文件描述符，用于监听和接受客户端连接。
     int fd;
+    //指向一个 redisDb 数组的指针，Redis 支持多数据库，这个数组包含了所有的数据库实例。
     redisDb *db;
+    //用于对象共享池，Redis 可以配置为共享某些类型的对象以节省内存。这个字典和大小分别用于存储共享对象和跟踪共享池的大小。
     dict *sharingpool;
+    //对象共享池大小
     unsigned int sharingpoolsize;
+    //自上次保存数据库以来，数据库被修改的次数
     long long dirty;            /* changes to DB from the last save */
+    //一个列表，包含了所有连接到服务器的客户端的 redisClient 结构体指针。
     list *clients;
+    //分别包含从服务器（slave）和监视器（monitor）的列表。
     list *slaves, *monitors;
+    //用于存储网络错误的缓冲区。
     char neterr[ANET_ERR_LEN];
+    //指向 Redis 事件循环的指针，
     aeEventLoop *el;
+    //cron 函数（Redis 的定时任务处理函数）运行的次数。
     int cronloops;              /* number of times the cron function run */
+    //一个列表，用于存储已经释放但可能再次使用的对象，以减少内存分配的开销。
     list *objfreelist;          /* A list of freed objects to avoid malloc() */
+    //后一次成功保存数据库的时间戳。
     time_t lastsave;            /* Unix time of last save succeeede */
+    //Redis 服务器当前使用的内存量
     size_t usedmemory;             /* Used memory in megabytes */
     /* Fields used only for stats */
-    time_t stat_starttime;         /* server start time */
-    long long stat_numcommands;    /* number of processed commands */
-    long long stat_numconnections; /* number of connections received */
+    time_t stat_starttime;         /* server start time 服务器启动的时间戳。*/
+    long long stat_numcommands;    /* number of processed commands 服务器处理过的命令总数*/
+    long long stat_numconnections; /* number of connections received 服务器接收到的连接总数*/
     /* Configuration */
-    int verbosity;
-    int glueoutputbuf;
-    int maxidletime;
-    int dbnum;
-    int daemonize;
-    char *pidfile;
-    int bgsaveinprogress;
-    pid_t bgsavechildpid;
-    struct saveparam *saveparams;
-    int saveparamslen;
-    char *logfile;
-    char *bindaddr;
-    char *dbfilename;
-    char *requirepass;
-    int shareobjects;
+    int verbosity;//日志级别
+    int glueoutputbuf;//是否将输出合并 使用粘包
+    int maxidletime;//最大空闲时间
+    int dbnum;//数据库数量
+    int daemonize;//是否作为守护进程运行
+    char *pidfile;//PID 文件路径
+    int bgsaveinprogress;//是否正在进行后台保存
+    pid_t bgsavechildpid;//后台保存子进程的 PID
+    struct saveparam *saveparams;//保存参数
+    int saveparamslen;//参数长度
+    char *logfile;//日志文件路径
+    char *bindaddr;//绑定地址
+    char *dbfilename;//数据库文件名
+    char *requirepass;//密码
+    int shareobjects;//是否共享对象
     /* Replication related */
-    int isslave;
-    char *masterhost;
-    int masterport;
-    redisClient *master;    /* client that is master for this slave */
-    int replstate;
-    unsigned int maxclients;
-    unsigned int maxmemory;
+    int isslave;//指示当前服务器是否是一个从服务器。
+    char *masterhost;//主服务器的地址
+    int masterport;//主服务器的端口号
+    redisClient *master;    /* client that is master for this slave 指向连接到主服务器的客户端的指针 */
+    int replstate;//复制状态。
+    unsigned int maxclients;//服务器允许的最大客户端连接数。
+    unsigned int maxmemory;//服务器允许使用的最大内存量
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -273,22 +279,25 @@ struct redisServer {
 
 typedef void redisCommandProc(redisClient *c);
 struct redisCommand {
-    char *name;
-    redisCommandProc *proc;
-    int arity;
+    char *name;//命令的名称，是一个以 null 结尾的字符串。例如，对于 SET 命令，这个成员的值将是 "SET"。
+    redisCommandProc *proc;//该函数指针指向处理该命令的函数。
+    int arity;//命令的参数个数。Redis 命令可以接受不同数量的参数，arity 成员指定了该命令必须接收的参数数量
+    //一个标志位字段，用于存储与该命令相关的各种标志。这些标志可以指示命令的性质，比如命令是否可以在脚本中执行、
+    //是否可以在订阅/发布通道上执行、是否需要加载数据库等。Redis 使用位掩码的方式来设置和检查这些标志。
     int flags;
 };
-
+//定义了一种方式来存储和引用函数或代码段的名称及其对应的内存地址（或指针）
 struct redisFunctionSym {
+    //这是一个指向字符数组的指针，用于存储函数或代码段的名称。这个名称通常是一个以 null 结尾的字符串，用于唯一标识函数或代码段。
     char *name;
-    unsigned long pointer;
+    unsigned long pointer;//用于存储函数或代码段的内存地址
 };
 
 typedef struct _redisSortObject {
-    robj *obj;
+    robj *obj;//这是一种能够容纳字符串/列表/集合的类型
     union {
-        double score;
-        robj *cmpobj;
+        double score;//分数
+        robj *cmpobj;//于在执行基于对象比较的排序时，存储与当前对象进行比较的另一个对象。
     } u;
 } redisSortObject;
 
@@ -296,8 +305,14 @@ typedef struct _redisSortOperation {
     int type;
     robj *pattern;
 } redisSortOperation;
-
+//920行初始化
 struct sharedObjectsStruct {
+    //crlf 指向一个包含换行符（CRLF，即 \r\n）的字符串对象
+    //ok 和 err 分别指向表示成功和错误响应的字符串对象。
+    //emptybulk 和 nullbulk 用于表示空的批量回复（bulk reply）和空值的批量回复。
+    //czero 和 cone 分别指向表示数字 0 和 1 的字符串对象。
+    //pong 用于处理 PING 命令的响应。
+    //select0 到 select9 用于处理数据库选择命令的响应
     robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *pong, *space,
     *colon, *nullbulk, *nullmultibulk,
     *emptymultibulk, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
@@ -307,12 +322,18 @@ struct sharedObjectsStruct {
 } shared;
 
 /*================================ Prototypes =============================== */
-
+//释放robj中的String对象
 static void freeStringObject(robj *o);
+//释放robj中的String对象
 static void freeListObject(robj *o);
+//释放哈希表
 static void freeSetObject(robj *o);
+//引用计数-1,根据类型type释放ptr，将o添加到一个名为server.objfreelist的列表
+//如果超过REDIS_OBJFREELIST_MAX或者添加失败则会释放o
 static void decrRefCount(void *o);
+//创建一个robj*对象
 static robj *createObject(int type, void *ptr);
+//释放客户端结构体
 static void freeClient(redisClient *c);
 static int rdbLoad(char *filename);
 static void addReply(redisClient *c, robj *obj);
@@ -322,6 +343,8 @@ static int rdbSaveBackground(char *filename);
 static robj *createStringObject(char *ptr, size_t len);
 static void replicationFeedSlaves(list *slaves, struct redisCommand *cmd, int dictid, robj **argv, int argc);
 static int syncWithMaster(void);
+//这段代码实现了一个简单的对象共享池机制，用于在Redis中减少内存使用，特别是针对字符串类型的对象。
+//它通过维护一个字典（server.sharingpool）来跟踪哪些字符串对象已经被共享，并允许后续请求重用这些对象而不是创建新的对象
 static robj *tryObjectSharing(robj *o);
 static int removeExpire(redisDb *db, robj *key);
 static int expireIfNeeded(redisDb *db, robj *key);
@@ -396,74 +419,85 @@ static void debugCommand(redisClient *c);
 /*================================= Globals ================================= */
 
 /* Global vars */
+/*
+typedef void redisCommandProc(redisClient *c);
+struct redisCommand {
+    char *name;//命令的名称，是一个以 null 结尾的字符串。例如，对于 SET 命令，这个成员的值将是 "SET"。
+    redisCommandProc *proc;//该函数指针指向处理该命令的函数。
+    int arity;//命令的参数个数。Redis 命令可以接受不同数量的参数，arity 成员指定了该命令必须接收的参数数量
+    //一个标志位字段，用于存储与该命令相关的各种标志。这些标志可以指示命令的性质，比如命令是否可以在脚本中执行、
+    //是否可以在订阅/发布通道上执行、是否需要加载数据库等。Redis 使用位掩码的方式来设置和检查这些标志。
+    int flags;
+};
+ */
 static struct redisServer server; /* server global state */
 static struct redisCommand cmdTable[] = {
-    {"get",getCommand,2,REDIS_CMD_INLINE},
-    {"set",setCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"setnx",setnxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"del",delCommand,-2,REDIS_CMD_INLINE},
-    {"exists",existsCommand,2,REDIS_CMD_INLINE},
-    {"incr",incrCommand,2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"decr",decrCommand,2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"mget",mgetCommand,-2,REDIS_CMD_INLINE},
-    {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"rpop",rpopCommand,2,REDIS_CMD_INLINE},
-    {"lpop",lpopCommand,2,REDIS_CMD_INLINE},
-    {"llen",llenCommand,2,REDIS_CMD_INLINE},
-    {"lindex",lindexCommand,3,REDIS_CMD_INLINE},
-    {"lset",lsetCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"lrange",lrangeCommand,4,REDIS_CMD_INLINE},
-    {"ltrim",ltrimCommand,4,REDIS_CMD_INLINE},
-    {"lrem",lremCommand,4,REDIS_CMD_BULK},
-    {"sadd",saddCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
-    {"srem",sremCommand,3,REDIS_CMD_BULK},
-    {"smove",smoveCommand,4,REDIS_CMD_BULK},
-    {"sismember",sismemberCommand,3,REDIS_CMD_BULK},
-    {"scard",scardCommand,2,REDIS_CMD_INLINE},
-    {"spop",spopCommand,2,REDIS_CMD_INLINE},
-    {"sinter",sinterCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"sinterstore",sinterstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"sunion",sunionCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"sunionstore",sunionstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"sdiff",sdiffCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"sdiffstore",sdiffstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"smembers",sinterCommand,2,REDIS_CMD_INLINE},
-    {"incrby",incrbyCommand,3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"decrby",decrbyCommand,3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"getset",getSetCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},
+    {"get",getCommand,2,REDIS_CMD_INLINE},//获取一个key保存的值
+    {"set",setCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//插入一个string 允许重复
+    {"setnx",setnxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//插入一个string 不允许重复
+    {"del",delCommand,-2,REDIS_CMD_INLINE},//删除
+    {"exists",existsCommand,2,REDIS_CMD_INLINE},//存在
+    {"incr",incrCommand,2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//+1
+    {"decr",decrCommand,2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//-1
+    {"mget",mgetCommand,-2,REDIS_CMD_INLINE},////获取多个值
+    {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//rpush
+    {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//lpush
+    {"rpop",rpopCommand,2,REDIS_CMD_INLINE},//rpop
+    {"lpop",lpopCommand,2,REDIS_CMD_INLINE},//lpop
+    {"llen",llenCommand,2,REDIS_CMD_INLINE},////list长度
+    {"lindex",lindexCommand,3,REDIS_CMD_INLINE},//获取list第index个
+    {"lset",lsetCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//列表的指定索引位置设置一个新元素。
+    {"lrange",lrangeCommand,4,REDIS_CMD_INLINE},////在list中获取下标left-right的值
+    {"ltrim",ltrimCommand,4,REDIS_CMD_INLINE},////用法 ltrim list num1 num2 只保留list num1-num2的内容
+    {"lrem",lremCommand,4,REDIS_CMD_BULK},//list去掉 n 个 x
+    {"sadd",saddCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},////set中增加一个key
+    {"srem",sremCommand,3,REDIS_CMD_BULK},////删除key
+    {"smove",smoveCommand,4,REDIS_CMD_BULK},////将set a中元素x移到set b
+    {"sismember",sismemberCommand,3,REDIS_CMD_BULK},//查看set a中是不是有元素x
+    {"scard",scardCommand,2,REDIS_CMD_INLINE},////求s的大小
+    {"spop",spopCommand,2,REDIS_CMD_INLINE},//SPOP命令用于从集合中随机移除一个元素
+    {"sinter",sinterCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//求多个集合交集
+    {"sinterstore",sinterstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//求多个集合交集并存储
+    {"sunion",sunionCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//交集
+    {"sunionstore",sunionstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//交集存储
+    {"sdiff",sdiffCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//差集
+    {"sdiffstore",sdiffstoreCommand,-3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//差集存储
+    {"smembers",sinterCommand,2,REDIS_CMD_INLINE},//交集
+    {"incrby",incrbyCommand,3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//+n
+    {"decrby",decrbyCommand,3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},//-n
+    {"getset",getSetCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM},//get and set
     {"randomkey",randomkeyCommand,1,REDIS_CMD_INLINE},
-    {"select",selectCommand,2,REDIS_CMD_INLINE},
-    {"move",moveCommand,3,REDIS_CMD_INLINE},
-    {"rename",renameCommand,3,REDIS_CMD_INLINE},
-    {"renamenx",renamenxCommand,3,REDIS_CMD_INLINE},
-    {"expire",expireCommand,3,REDIS_CMD_INLINE},
-    {"keys",keysCommand,2,REDIS_CMD_INLINE},
-    {"dbsize",dbsizeCommand,1,REDIS_CMD_INLINE},
+    {"select",selectCommand,2,REDIS_CMD_INLINE},//选择数据
+    {"move",moveCommand,3,REDIS_CMD_INLINE},////从当前库拿出一个key放到指定的库
+    {"rename",renameCommand,3,REDIS_CMD_INLINE},////重命名
+    {"renamenx",renamenxCommand,3,REDIS_CMD_INLINE},//重命名
+    {"expire",expireCommand,3,REDIS_CMD_INLINE},//增加过期时间
+    {"keys",keysCommand,2,REDIS_CMD_INLINE},//查找符合正则表达式的key
+    {"dbsize",dbsizeCommand,1,REDIS_CMD_INLINE},//数据库大小
     {"auth",authCommand,2,REDIS_CMD_INLINE},
-    {"ping",pingCommand,1,REDIS_CMD_INLINE},
-    {"echo",echoCommand,2,REDIS_CMD_BULK},
-    {"save",saveCommand,1,REDIS_CMD_INLINE},
-    {"bgsave",bgsaveCommand,1,REDIS_CMD_INLINE},
+    {"ping",pingCommand,1,REDIS_CMD_INLINE},//ping pong
+    {"echo",echoCommand,2,REDIS_CMD_BULK},//回显
+    {"save",saveCommand,1,REDIS_CMD_INLINE},//保存rdb
+    {"bgsave",bgsaveCommand,1,REDIS_CMD_INLINE},////新进程保存rdb
     {"shutdown",shutdownCommand,1,REDIS_CMD_INLINE},
-    {"lastsave",lastsaveCommand,1,REDIS_CMD_INLINE},
-    {"type",typeCommand,2,REDIS_CMD_INLINE},
+    {"lastsave",lastsaveCommand,1,REDIS_CMD_INLINE},//上一次存储时间
+    {"type",typeCommand,2,REDIS_CMD_INLINE},////查看key类型
     {"sync",syncCommand,1,REDIS_CMD_INLINE},
-    {"flushdb",flushdbCommand,1,REDIS_CMD_INLINE},
-    {"flushall",flushallCommand,1,REDIS_CMD_INLINE},
+    {"flushdb",flushdbCommand,1,REDIS_CMD_INLINE},//清空数据库
+    {"flushall",flushallCommand,1,REDIS_CMD_INLINE},//清空所有数据库
     {"sort",sortCommand,-2,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM},
-    {"info",infoCommand,1,REDIS_CMD_INLINE},
+    {"info",infoCommand,1,REDIS_CMD_INLINE},////打印一些日志
     {"monitor",monitorCommand,1,REDIS_CMD_INLINE},
-    {"ttl",ttlCommand,2,REDIS_CMD_INLINE},
+    {"ttl",ttlCommand,2,REDIS_CMD_INLINE},////返回过期时间
     {"slaveof",slaveofCommand,3,REDIS_CMD_INLINE},
-    {"debug",debugCommand,-2,REDIS_CMD_INLINE},
+    {"debug",debugCommand,-2,REDIS_CMD_INLINE},//debug
     {NULL,NULL,0,0}
 };
 /*============================ Utility functions ============================ */
 
 /* Glob-style pattern matching. */
 int stringmatchlen(const char *pattern, int patternLen,
-        const char *string, int stringLen, int nocase)
+        const char *string, int stringLen, int nocase)//nocase控制大小写敏感
 {
     while(patternLen) {
         switch(pattern[0]) {
@@ -474,6 +508,7 @@ int stringmatchlen(const char *pattern, int patternLen,
             }
             if (patternLen == 1)
                 return 1; /* match */
+            //尝试匹配string,如果匹配失败跳过第一个字符继续匹配，直到完全失败
             while(stringLen) {
                 if (stringmatchlen(pattern+1, patternLen-1,
                             string, stringLen, nocase))
@@ -484,6 +519,8 @@ int stringmatchlen(const char *pattern, int patternLen,
             return 0; /* no match */
             break;
         case '?':
+        //如果遇到 ?，则检查字符串是否还有剩余字符。
+        //如果有，则继续匹配下一个字符；如果没有，则返回 0
             if (stringLen == 0)
                 return 0; /* no match */
             string++;
@@ -491,6 +528,7 @@ int stringmatchlen(const char *pattern, int patternLen,
             break;
         case '[':
         {
+        //string只要和[]里面内容一个符合就行
             int not, match;
 
             pattern++;
@@ -505,6 +543,7 @@ int stringmatchlen(const char *pattern, int patternLen,
                 if (pattern[0] == '\\') {
                     pattern++;
                     patternLen--;
+                    //跳过转义/并且判断/后面的字符是不是与string匹配
                     if (pattern[0] == string[0])
                         match = 1;
                 } else if (pattern[0] == ']') {
@@ -552,12 +591,16 @@ int stringmatchlen(const char *pattern, int patternLen,
             break;
         }
         case '\\':
+        //如果遇到 \，则跳过它并处理其后的字符作为普通字符
             if (patternLen >= 2) {
                 pattern++;
                 patternLen--;
             }
             /* fall through */
         default:
+        //对于非通配符、非转义字符，直接比较字符串和模式的当前字符。
+        //如果 nocase 为真，则进行大小写不敏感的匹配。
+        //如果不匹配，则返回 0（匹配失败）
             if (!nocase) {
                 if (pattern[0] != string[0])
                     return 0; /* no match */
@@ -571,6 +614,7 @@ int stringmatchlen(const char *pattern, int patternLen,
         }
         pattern++;
         patternLen--;
+        //string匹配完成，看看pattern是不是后面都是*
         if (stringLen == 0) {
             while(*pattern == '*') {
                 pattern++;
@@ -584,6 +628,7 @@ int stringmatchlen(const char *pattern, int patternLen,
     return 0;
 }
 
+//将日志输出到文件或者打印到终端，如果server.logfile不存在则打印到终端
 static void redisLog(int level, const char *fmt, ...) {
     va_list ap;
     FILE *fp;
@@ -615,6 +660,7 @@ static void redisLog(int level, const char *fmt, ...) {
  * keys and radis objects as values (objects can hold SDS strings,
  * lists, sets). */
 
+//判断key1和key2是否相等
 static int sdsDictKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
@@ -626,7 +672,7 @@ static int sdsDictKeyCompare(void *privdata, const void *key1,
     if (l1 != l2) return 0;
     return memcmp(key1, key2, l1) == 0;
 }
-
+//单纯调用了decrRefCount，引用计数减1
 static void dictRedisObjectDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
@@ -634,13 +680,14 @@ static void dictRedisObjectDestructor(void *privdata, void *val)
     decrRefCount(val);
 }
 
+//robj中保存的ptr为dict，判断两个dict是否相等
 static int dictSdsKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
     const robj *o1 = key1, *o2 = key2;
     return sdsDictKeyCompare(privdata,o1->ptr,o2->ptr);
 }
-
+//计算rojb->ptr的hash
 static unsigned int dictSdsHash(const void *key) {
     const robj *o = key;
     return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
@@ -679,11 +726,14 @@ static void oom(const char *msg) {
 }
 
 /* ====================== Redis server networking stuff ===================== */
+//这个函数 closeTimedoutClients 的目的是关闭那些超过最大空闲时间（server.maxidletime）的客户端连接，
+//但会排除掉从服务器（slave）和主服务器（master）的连接，因为对于这两种类型的连接，通常不会设置空闲超时。
+//这个函数在 Redis 服务器中周期性地被调用，以确保不会长时间保持无活动的客户端连接，从而节省系统资源
 static void closeTimedoutClients(void) {
     redisClient *c;
     listNode *ln;
     time_t now = time(NULL);
-
+    //从server的clients列表中去掉长时间保持无活动的客户端
     listRewind(server.clients);
     while ((ln = listYield(server.clients)) != NULL) {
         c = listNodeValue(ln);
@@ -695,7 +745,7 @@ static void closeTimedoutClients(void) {
         }
     }
 }
-
+//判断是否需要重新变换dict的大小
 static int htNeedsResize(dict *dict) {
     long long size, used;
 
@@ -709,8 +759,14 @@ static int htNeedsResize(dict *dict) {
  * we resize the hash table to save memory */
 static void tryResizeHashTables(void) {
     int j;
-
+    //server.dbnum数据库数量
     for (j = 0; j < server.dbnum; j++) {
+        //redisDb *db;
+        //typedef struct redisDb {
+        //dict *dict;//存储数据库中的所有键值对。
+        //dict *expires;//存储设置了过期时间的键
+        //int id;
+        //} redisDb;
         if (htNeedsResize(server.db[j].dict)) {
             redisLog(REDIS_DEBUG,"The hash table %d is too sparse, resize it...",j);
             dictResize(server.db[j].dict);
@@ -723,7 +779,7 @@ static void tryResizeHashTables(void) {
 
 //定时器函数 aeCreateTimeEvent(server.el, 1000, serverCron, NULL, NULL);
 static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
-    int j, loops = server.cronloops++;
+    int j, loops = server.cronloops++;//定时任务处理函数运行的次数。
     REDIS_NOTUSED(eventLoop);
     REDIS_NOTUSED(id);
     REDIS_NOTUSED(clientData);
@@ -732,6 +788,7 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
     server.usedmemory = zmalloc_used_memory();
 
     /* Show some info about non-empty databases */
+    //将所有数据库里面的信息打印到日志
     for (j = 0; j < server.dbnum; j++) {
         long long size, used, vkeys;
 
@@ -744,6 +801,12 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
         }
     }
 
+    /*我们不想在后台保存时调整哈希表的大小
+    *正在进行中：使用fork（）创建保存子对象，即
+    *在大多数现代系统中，采用写时复制语义实现，因此
+    *如果我们在保存子项实际工作时调整HT的大小
+    *父级中的大量内存移动会导致大量页面
+    *复制*/
     /* We don't want to resize the hash tables while a bacground saving
      * is in progress: the saving child is created using fork() that is
      * implemented with a copy-on-write semantic in most modern systems, so
@@ -762,19 +825,26 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
     }
 
     /* Close connections of timedout clients */
+    //如果配置了最大空闲时间（server.maxidletime），并且满足循环次数条件（loops % 10），
+    //则调用 closeTimedoutClients() 函数关闭那些超过最大空闲时间的客户端连接。
     if (server.maxidletime && !(loops % 10))
         closeTimedoutClients();
 
     /* Check if a background saving in progress terminated */
     if (server.bgsaveinprogress) {
         int statloc;
+        //通过调用wait4函数（参数-1表示等待任意子进程，&statloc用于存储子进程的退出状态，
+        //WNOHANG选项表示如果没有子进程退出，则立即返回），尝试检查是否有后台保存的子进程已经结束。
         if (wait4(-1,&statloc,WNOHANG,NULL)) {
+            //如果wait4返回非零值（即确实有子进程退出），则通过WEXITSTATUS(statloc)
+            //获取子进程的退出码，通过WIFSIGNALED(statloc)检查子进程是否因接收到信号而退出。
             int exitcode = WEXITSTATUS(statloc);
             int bysignal = WIFSIGNALED(statloc);
 
             if (!bysignal && exitcode == 0) {
                 redisLog(REDIS_NOTICE,
                     "Background saving terminated with success");
+                //刚保存完，所以没有change
                 server.dirty = 0;
                 server.lastsave = time(NULL);
             } else if (!bysignal && exitcode != 0) {
@@ -785,12 +855,20 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
                 rdbRemoveTempFile(server.bgsavechildpid);
             }
             server.bgsaveinprogress = 0;
-            server.bgsavechildpid = -1;
+            server.bgsavechildpid = -1;//后台保存进程
+            //根据后台保存是否成功（通过exitcode == 0 ? REDIS_OK : REDIS_ERR判断），
+            //来更新那些可能正在等待主服务器完成后台保存操作以进行同步的从服务器的状态。
             updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
         }
     } else {
         /* If there is not a background saving in progress check if
          * we have to save now */
+         /*
+        *struct saveparam {
+        *time_t seconds;
+        *int changes;
+        *};  
+         */
          time_t now = time(NULL);
          for (j = 0; j < server.saveparamslen; j++) {
             struct saveparam *sp = server.saveparams+j;
@@ -818,7 +896,7 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
             while (num--) {
                 dictEntry *de;
                 time_t t;
-
+                //随机获取一个expire然后如果超时则删除
                 if ((de = dictGetRandomKey(db->expires)) == NULL) break;
                 t = (time_t) dictGetEntryVal(de);
                 if (now > t) {
@@ -837,7 +915,7 @@ static int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientD
     }
     return 1000;
 }
-
+//用于初始化
 static void createSharedObjects(void) {
     shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n"));
     shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n"));
@@ -874,7 +952,14 @@ static void createSharedObjects(void) {
     shared.select8 = createStringObject("select 8\r\n",10);
     shared.select9 = createStringObject("select 9\r\n",10);
 }
+/*
+*struct saveparam {
+*    time_t seconds;
+*    int changes;
+*};
 
+*/
+//这段代码的主要功能是在Redis服务器配置中动态地添加一个新的保存参数
 static void appendServerSaveParams(time_t seconds, int changes) {
     server.saveparams = zrealloc(server.saveparams,sizeof(struct saveparam)*(server.saveparamslen+1));
     if (server.saveparams == NULL) oom("appendServerSaveParams");
@@ -882,7 +967,7 @@ static void appendServerSaveParams(time_t seconds, int changes) {
     server.saveparams[server.saveparamslen].changes = changes;
     server.saveparamslen++;
 }
-
+//释放保存参数
 static void ResetServerSaveParams() {
     zfree(server.saveparams);
     server.saveparams = NULL;
@@ -890,48 +975,51 @@ static void ResetServerSaveParams() {
 }
 
 static void initServerConfig() {
-    server.dbnum = REDIS_DEFAULT_DBNUM;
-    server.port = REDIS_SERVERPORT;
-    server.verbosity = REDIS_DEBUG;
-    server.maxidletime = REDIS_MAXIDLETIME;
+    server.dbnum = REDIS_DEFAULT_DBNUM;//16
+    server.port = REDIS_SERVERPORT;//6379
+    server.verbosity = REDIS_DEBUG;//日志级别 0
+    server.maxidletime = REDIS_MAXIDLETIME;//default client timeout 5*60
     server.saveparams = NULL;
     server.logfile = NULL; /* NULL = log on standard output */
     server.bindaddr = NULL;
-    server.glueoutputbuf = 1;
-    server.daemonize = 0;
+    server.glueoutputbuf = 1;////是否将输出合并
+    server.daemonize = 0;//是否作为守护进程运行
     server.pidfile = "/var/run/redis.pid";
     server.dbfilename = "dump.rdb";
-    server.requirepass = NULL;
-    server.shareobjects = 0;
-    server.sharingpoolsize = 1024;
-    server.maxclients = 0;
-    server.maxmemory = 0;
+    server.requirepass = NULL;///密码
+    server.shareobjects = 0;////是否共享对象
+    server.sharingpoolsize = 1024;//对象共享池大小
+    server.maxclients = 0;//服务器允许的最大客户端连接数
+    server.maxmemory = 0;////服务器允许使用的最大内存量
     ResetServerSaveParams();
 
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
     appendServerSaveParams(300,100);  /* save after 5 minutes and 100 changes */
     appendServerSaveParams(60,10000); /* save after 1 minute and 10000 changes */
     /* Replication related */
-    server.isslave = 0;
-    server.masterhost = NULL;
+    server.isslave = 0;//指示当前服务器是否是一个从服务器。
+    server.masterhost = NULL;////主服务器的地址
     server.masterport = 6379;
     server.master = NULL;
-    server.replstate = REDIS_REPL_NONE;
+    server.replstate = REDIS_REPL_NONE;////复制状态。 No active replication
 }
 
 static void initServer() {
     int j;
-
+//SIGHUP（Signal Hang Up）是一个信号，通常用于通知用户终端已经断开连接。在守护进程（daemon）和其他长时间运行的程序中，
+//SIGHUP信号通常用于要求程序重新加载其配置文件或执行某些清理操作。SIG_IGN是一个特殊的宏，表示忽略该信号。
     signal(SIGHUP, SIG_IGN);
+//SIGPIPE是一个信号，当向一个已经关闭其读取端的管道（pipe）或套接字（socket）写入数据时产生。默认情况下，当发生SIGPIPE信号时，进程会终止。
     signal(SIGPIPE, SIG_IGN);
+    //为几个关键的信号（段错误、总线错误、浮点异常和非法指令）设置信号处理函数。
     setupSigSegvAction();
-
+    //创建双向链表
     server.clients = listCreate();
     server.slaves = listCreate();
     server.monitors = listCreate();
     server.objfreelist = listCreate();
-    createSharedObjects();
-    server.el = aeCreateEventLoop();
+    createSharedObjects();//初始化shared
+    server.el = aeCreateEventLoop(200);//创建事件循环
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
     server.sharingpool = dictCreate(&setDictType,NULL);
     if (!server.db || !server.clients || !server.slaves || !server.monitors || !server.el || !server.objfreelist)
@@ -946,14 +1034,14 @@ static void initServer() {
         server.db[j].expires = dictCreate(&setDictType,NULL);
         server.db[j].id = j;
     }
-    server.cronloops = 0;
-    server.bgsaveinprogress = 0;
-    server.bgsavechildpid = -1;
-    server.lastsave = time(NULL);
-    server.dirty = 0;
-    server.usedmemory = 0;
-    server.stat_numcommands = 0;
-    server.stat_numconnections = 0;
+    server.cronloops = 0;//函数（Redis 的定时任务处理函数）运行的次数。
+    server.bgsaveinprogress = 0;//是否正在进行后台保存
+    server.bgsavechildpid = -1;////后台保存子进程的 PID
+    server.lastsave = time(NULL);//上次保存时间
+    server.dirty = 0;////自上次保存数据库以来，数据库被修改的次数
+    server.usedmemory = 0;//使用的内存
+    server.stat_numcommands = 0;//服务器处理过的命令总数
+    server.stat_numconnections = 0;//服务器接收到的连接总数
     server.stat_starttime = time(NULL);
     aeCreateTimeEvent(server.el, 1000, serverCron, NULL, NULL);
 }
@@ -964,13 +1052,13 @@ static long long emptyDb() {
     long long removed = 0;
 
     for (j = 0; j < server.dbnum; j++) {
-        removed += dictSize(server.db[j].dict);
-        dictEmpty(server.db[j].dict);
+        removed += dictSize(server.db[j].dict);////获取目前hash表中有多少条记录
+        dictEmpty(server.db[j].dict);//清空
         dictEmpty(server.db[j].expires);
     }
     return removed;
 }
-
+//不区分大小写
 static int yesnotoi(char *s) {
     if (!strcasecmp(s,"yes")) return 1;
     else if (!strcasecmp(s,"no")) return 0;
@@ -981,7 +1069,7 @@ static int yesnotoi(char *s) {
    will improve later if the config gets more complex */
 static void loadServerConfig(char *filename) {
     FILE *fp;
-    char buf[REDIS_CONFIGLINE_MAX+1], *err = NULL;
+    char buf[REDIS_CONFIGLINE_MAX+1], *err = NULL;//REDIS_CONFIGLINE_MAX=1024
     int linenum = 0;
     sds line = NULL;
 
@@ -1000,7 +1088,7 @@ static void loadServerConfig(char *filename) {
 
         linenum++;
         line = sdsnew(buf);
-        line = sdstrim(line," \t\r\n");
+        line = sdstrim(line," \t\r\n");//去掉字符串两边指定的字符
 
         /* Skip comments and blank lines*/
         if (line[0] == '#' || line[0] == '\0') {
@@ -1013,17 +1101,17 @@ static void loadServerConfig(char *filename) {
         sdstolower(argv[0]);
 
         /* Execute config directives */
-        if (!strcasecmp(argv[0],"timeout") && argc == 2) {
+        if (!strcasecmp(argv[0],"timeout") && argc == 2) {//最大空闲时间
             server.maxidletime = atoi(argv[1]);
             if (server.maxidletime < 0) {
                 err = "Invalid timeout value"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"port") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"port") && argc == 2) {//端口
             server.port = atoi(argv[1]);
             if (server.port < 1 || server.port > 65535) {
                 err = "Invalid port"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"bind") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"bind") && argc == 2) {//ip
             server.bindaddr = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"save") && argc == 3) {
             int seconds = atoi(argv[1]);
@@ -1031,7 +1119,7 @@ static void loadServerConfig(char *filename) {
             if (seconds < 1 || changes < 0) {
                 err = "Invalid save parameters"; goto loaderr;
             }
-            appendServerSaveParams(seconds,changes);
+            appendServerSaveParams(seconds,changes);//保存参数设置
         } else if (!strcasecmp(argv[0],"dir") && argc == 2) {
             if (chdir(argv[1]) == -1) {
                 redisLog(REDIS_WARNING,"Can't chdir to '%s': %s",
@@ -1082,20 +1170,20 @@ static void loadServerConfig(char *filename) {
             if ((server.glueoutputbuf = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"shareobjects") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"shareobjects") && argc == 2) {//是否共享对象
             if ((server.shareobjects = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"shareobjectspoolsize") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"shareobjectspoolsize") && argc == 2) {//对象共享池大小
             server.sharingpoolsize = atoi(argv[1]);
             if (server.sharingpoolsize < 1) {
                 err = "invalid object sharing pool size"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"daemonize") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"daemonize") && argc == 2) {//守护进程
             if ((server.daemonize = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {////密码
           server.requirepass = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"pidfile") && argc == 2) {
           server.pidfile = zstrdup(argv[1]);
@@ -1124,24 +1212,28 @@ static void freeClientArgv(redisClient *c) {
     int j;
 
     for (j = 0; j < c->argc; j++)
-        decrRefCount(c->argv[j]);
+        decrRefCount(c->argv[j]);////argv为指向命令参数数组的指针。当 Redis 解析了客户端发送的命令后，它会将命令的参数存储在这个数组中。
     c->argc = 0;
 }
 
+//没看完
 static void freeClient(redisClient *c) {
     listNode *ln;
-
+    //取消监听客户端的读和写事件
     aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
     aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+    //用于存储客户端发送的查询命令的缓冲区。
     sdsfree(c->querybuf);
+    ////指向回复队列的指针。Redis 会将命令的回复添加到这个队列中，然后通过套接字发送给客户端。
     listRelease(c->reply);
+    ////已经发送给客户端的回复字节数。这个值用于跟踪回复的发送进度，特别是在处理大回复时。
     freeClientArgv(c);
     close(c->fd);
     ln = listSearchKey(server.clients,c);
     assert(ln != NULL);
     listDelNode(server.clients,ln);
-    if (c->flags & REDIS_SLAVE) {
-        if (c->replstate == REDIS_REPL_SEND_BULK && c->repldbfd != -1)
+    if (c->flags & REDIS_SLAVE) {//This client is a slave server
+        if (c->replstate == REDIS_REPL_SEND_BULK && c->repldbfd != -1)////复制数据库文件描述符。
             close(c->repldbfd);
         list *l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
@@ -1155,14 +1247,16 @@ static void freeClient(redisClient *c) {
     zfree(c->argv);
     zfree(c);
 }
-
+//在需要将多个小的回复缓冲区（robj 对象，通常包含字符串数据）
+//合并成一个大的缓冲区时进行优化。这通常是为了减少在将回复发送给客户端时的系统调用次数，
+//从而提高性能。
 static void glueReplyBuffersIfNeeded(redisClient *c) {
     int totlen = 0;
     listNode *ln;
     robj *o;
 
-    listRewind(c->reply);
-    while((ln = listYield(c->reply))) {
+    listRewind(c->reply);//将链表结构中内含的迭代器设置为向尾遍历
+    while((ln = listYield(c->reply))) {//放弃当前访问的节点，返回下一个节点的值
         o = ln->value;
         totlen += sdslen(o->ptr);
         /* This optimization makes more sense if we don't have to copy
@@ -1192,7 +1286,7 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
     robj *o;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
-
+    //server.glueoutputbuf表示是否使用粘包
     if (server.glueoutputbuf && listLength(c->reply) > 1)
         glueReplyBuffersIfNeeded(c);
     while(listLength(c->reply)) {
@@ -1241,7 +1335,7 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
     }
 }
-
+//查找命令，以及关联函数
 static struct redisCommand *lookupCommand(char *name) {
     int j = 0;
     while(cmdTable[j].name != NULL) {
@@ -1252,6 +1346,7 @@ static struct redisCommand *lookupCommand(char *name) {
 }
 
 /* resetClient prepare the client to process the next command */
+//重置client处理下一条命令
 static void resetClient(redisClient *c) {
     freeClientArgv(c);
     c->bulklen = -1;
@@ -1270,10 +1365,12 @@ static int processCommand(redisClient *c) {
     long long dirty;
 
     /* Free some memory if needed (maxmemory setting) */
+    //如果服务器配置了最大内存限制（server.maxmemory），则调用 freeMemoryIfNeeded 函数来释放足够的内存，以满足内存使用不超过限制。
     if (server.maxmemory) freeMemoryIfNeeded();
 
     /* The QUIT command is handled as a special case. Normal command
      * procs are unable to close the client connection safely */
+    //特殊情况处理，如果客户端请求的是 QUIT 命令，则直接调用 freeClient 函数关闭客户端连接，并返回 0。
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         freeClient(c);
         return 0;
@@ -1293,9 +1390,11 @@ static int processCommand(redisClient *c) {
         resetClient(c);
         return 1;
     } else if (cmd->flags & REDIS_CMD_BULK && c->bulklen == -1) {
+        //从最后一位读取长度
         int bulklen = atoi(c->argv[c->argc-1]->ptr);
-
+        //释放最后一个参数
         decrRefCount(c->argv[c->argc-1]);
+        //接下来，它检查 bulklen 是否在有效范围内
         if (bulklen < 0 || bulklen > 1024*1024*1024) {
             c->argc--;
             addReplySds(c,sdsnew("-ERR invalid bulk write count\r\n"));
@@ -1306,9 +1405,12 @@ static int processCommand(redisClient *c) {
         c->bulklen = bulklen+2; /* add two bytes for CR+LF */
         /* It is possible that the bulk read is already in the
          * buffer. Check this condition and handle it accordingly */
+        //这行代码从 c->querybuf 中提取前 c->bulklen-2 个字节作为批量数据（减去2是为了排除可能的尾随换行符），
+        //并使用 createStringObject 函数创建一个新的字符串对象。然后，这个新创建的对象被存储在 c->argv 数组的 c->argc 索引处。
         if ((signed)sdslen(c->querybuf) >= c->bulklen) {
             c->argv[c->argc] = createStringObject(c->querybuf,c->bulklen-2);
             c->argc++;
+            //c->querybuf减少
             c->querybuf = sdsrange(c->querybuf,c->bulklen,-1);
         } else {
             return 1;
@@ -1328,6 +1430,7 @@ static int processCommand(redisClient *c) {
     }
 
     /* Exec the command */
+    //执行命令，如果存在dirty则把命令发给从服务器和监视服务器
     dirty = server.dirty;
     cmd->proc(c);
     if (server.dirty-dirty != 0 && listLength(server.slaves))
@@ -1344,14 +1447,16 @@ static int processCommand(redisClient *c) {
     resetClient(c);
     return 1;
 }
-
+//replicationFeedSlaves 函数是 Redis 复制功能的一部分，
+//用于将命令及其参数复制给所有处于活动状态的从服务器（slave）。这个函数处理命令的序列化，确保它们可以被从服务器正确解析和执行。下面是该函数的详细解释：
 static void replicationFeedSlaves(list *slaves, struct redisCommand *cmd, int dictid, robj **argv, int argc) {
     listNode *ln;
     int outc = 0, j;
     robj **outv;
     /* (args*2)+1 is enough room for args, spaces, newlines */
     robj *static_outv[REDIS_STATIC_ARGS*2+1];
-
+//首先，根据命令参数的数量（argc），函数决定是使用静态分配的数组static_outv还是动态分配一个更大的数组outv来存储输出对象。
+//如果参数数量不超过REDIS_STATIC_ARGS，则使用静态数组以节省内存。否则，动态分配足够的内存。
     if (argc <= REDIS_STATIC_ARGS) {
         outv = static_outv;
     } else {
@@ -1436,6 +1541,7 @@ static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mas
         return;
     }
     if (nread) {
+        //进行字符串拼接
         c->querybuf = sdscatlen(c->querybuf, buf, nread);
         c->lastinteraction = time(NULL);
     } else {
@@ -1443,6 +1549,8 @@ static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mas
     }
 
 again:
+    //如果没有进行批处理，度取出一行，将参数分解出来，放到argc和argv中，并处理参数
+    //如果每处理完，这继续运行到again的位置
     if (c->bulklen == -1) {
         /* Read the first line of the query */
         char *p = strchr(c->querybuf,'\n');
@@ -1455,7 +1563,7 @@ again:
             query = c->querybuf;
             c->querybuf = sdsempty();
             querylen = 1+(p-(query));
-            if (sdslen(query) > querylen) {
+            if (sdslen(query) > querylen) {//c->querybuf指向提取出数据后面的部分
                 /* leave data after the first line of the query in the buffer */
                 c->querybuf = sdscatlen(c->querybuf,query+querylen,sdslen(query)-querylen);
             }
@@ -1513,14 +1621,14 @@ again:
         }
     }
 }
-
+//选择数据库
 static int selectDb(redisClient *c, int id) {
     if (id < 0 || id >= server.dbnum)
         return REDIS_ERR;
     c->db = &server.db[id];
     return REDIS_OK;
 }
-
+//引用计数+1
 static void *dupClientReplyValue(void *o) {
     incrRefCount((robj*)o);
     return 0;
@@ -1528,8 +1636,13 @@ static void *dupClientReplyValue(void *o) {
 
 static redisClient *createClient(int fd) {
     redisClient *c = zmalloc(sizeof(*c));
-
+    /**
+    * 将fd设置为非阻塞型
+    */
     anetNonBlock(NULL,fd);
+    /**
+    * 将TCP设为非延迟的，即屏蔽Nagle算法
+    */
     anetTcpNoDelay(NULL,fd);
     if (!c) return NULL;
     selectDb(c,0);
@@ -1541,26 +1654,31 @@ static redisClient *createClient(int fd) {
     c->sentlen = 0;
     c->flags = 0;
     c->lastinteraction = time(NULL);
-    c->authenticated = 0;
-    c->replstate = REDIS_REPL_NONE;
+    c->authenticated = 0;//密码
+    c->replstate = REDIS_REPL_NONE;//No active replication
     if ((c->reply = listCreate()) == NULL) oom("listCreate");
     listSetFreeMethod(c->reply,decrRefCount);
     listSetDupMethod(c->reply,dupClientReplyValue);
     if (aeCreateFileEvent(server.el, c->fd, AE_READABLE,
-        readQueryFromClient, c, NULL) == AE_ERR) {
+        readQueryFromClient, c) == AE_ERR) {
         freeClient(c);
         return NULL;
     }
+    
+/*
+ * 尾部插入节点的值
+ */
     if (!listAddNodeTail(server.clients,c)) oom("listAddNodeTail");
     return c;
 }
-
+//注册一个客户端的可写事件
 static void addReply(redisClient *c, robj *obj) {
     if (listLength(c->reply) == 0 &&
-        (c->replstate == REDIS_REPL_NONE ||
+        (c->replstate == REDIS_REPL_NONE ||//如果这个客户端是一个从服务器，这个字段将存储其复制状态
          c->replstate == REDIS_REPL_ONLINE) &&
         aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
-        sendReplyToClient, c, NULL) == AE_ERR) return;
+        sendReplyToClient, c) == AE_ERR) return;
+    //注册了可写事件，但是并没有调用select函数，所以不会立刻执行
     if (!listAddNodeTail(c->reply,obj)) oom("listAddNodeTail");
     incrRefCount(obj);
 }
@@ -1570,7 +1688,7 @@ static void addReplySds(redisClient *c, sds s) {
     addReply(c,o);
     decrRefCount(o);
 }
-
+//连接一个客户端
 static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
     char cip[128];
@@ -1606,14 +1724,14 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 /* ======================= Redis objects implementation ===================== */
-
+//创建一个robj*对象
 static robj *createObject(int type, void *ptr) {
     robj *o;
 
     if (listLength(server.objfreelist)) {
-        listNode *head = listFirst(server.objfreelist);
-        o = listNodeValue(head);
-        listDelNode(server.objfreelist,head);
+        listNode *head = listFirst(server.objfreelist);//获取链表的头结点
+        o = listNodeValue(head);//获取链表当前节点的值
+        listDelNode(server.objfreelist,head);//从objfreelist删除
     } else {
         o = zmalloc(sizeof(*o));
     }
@@ -1641,23 +1759,30 @@ static robj *createSetObject(void) {
     if (!d) oom("dictCreate");
     return createObject(REDIS_SET,d);
 }
-
+//robj的void *ptr;可以储存任意redis数据结构
+//释放robj中的String对象
 static void freeStringObject(robj *o) {
     sdsfree(o->ptr);
 }
-
+//释放robj中的String对象
 static void freeListObject(robj *o) {
     listRelease((list*) o->ptr);
 }
-
+//释放哈希表
 static void freeSetObject(robj *o) {
     dictRelease((dict*) o->ptr);
 }
-
+//释放哈希表
 static void freeHashObject(robj *o) {
     dictRelease((dict*) o->ptr);
 }
-
+/*typedef struct redisObject {
+    void *ptr;
+    int type;
+    int refcount;
+} robj;
+*/
+//引用计数+1
 static void incrRefCount(robj *o) {
     o->refcount++;
 #ifdef DEBUG_REFCOUNT
@@ -1665,7 +1790,7 @@ static void incrRefCount(robj *o) {
         printf("Increment '%s'(%p), now is: %d\n",o->ptr,o,o->refcount);
 #endif
 }
-
+//引用计数字减1
 static void decrRefCount(void *obj) {
     robj *o = obj;
 
@@ -1681,6 +1806,9 @@ static void decrRefCount(void *obj) {
         case REDIS_HASH: freeHashObject(o); break;    //应该不会出现HASH类型
         default: assert(0 != 0); break;
         }
+        //在释放对象后，Redis尝试将对象添加到一个名为server.objfreelist的列表中，以便后续重用。
+        //如果server.objfreelist的长度超过了预设的最大值REDIS_OBJFREELIST_MAX，
+        //或者由于某种原因无法将对象添加到列表中（!listAddNodeHead(server.objfreelist,o)返回非零值），则直接调用zfree(o)释放对象所占用的内存。
         if (listLength(server.objfreelist) > REDIS_OBJFREELIST_MAX ||
             !listAddNodeHead(server.objfreelist,o))
             zfree(o);
@@ -1688,6 +1816,8 @@ static void decrRefCount(void *obj) {
 }
 
 /* Try to share an object against the shared objects pool */
+//这段代码实现了一个简单的对象共享池机制，用于在Redis中减少内存使用，特别是针对字符串类型的对象。
+//它通过维护一个字典（server.sharingpool）来跟踪哪些字符串对象已经被共享，并允许后续请求重用这些对象而不是创建新的对象。
 static robj *tryObjectSharing(robj *o) {
     struct dictEntry *de;
     unsigned long c;
@@ -1695,7 +1825,7 @@ static robj *tryObjectSharing(robj *o) {
     if (o == NULL || server.shareobjects == 0) return o;
 
     assert(o->type == REDIS_STRING);    //o是REDIS_STRING类型
-    de = dictFind(server.sharingpool,o);
+    de = dictFind(server.sharingpool,o);//sharingpool保存了o的使用次数
     if (de) {
         robj *shared = dictGetEntryKey(de);
 
@@ -1731,12 +1861,18 @@ static robj *tryObjectSharing(robj *o) {
         return o;
     }
 }
-
+/*
+    typedef struct redisDb {
+    dict *dict;//存储数据库中的所有键值对。
+    dict *expires;//存储设置了过期时间的键
+    int id;
+    } redisDb;
+*/
 static robj *lookupKey(redisDb *db, robj *key) {
     dictEntry *de = dictFind(db->dict,key);
     return de ? dictGetEntryVal(de) : NULL;
 }
-
+//查一个key如果过期则删除，然后查找
 static robj *lookupKeyRead(redisDb *db, robj *key) {
     expireIfNeeded(db,key);
     return lookupKey(db,key);
@@ -1763,18 +1899,18 @@ static int deleteKey(redisDb *db, robj *key) {
 }
 
 /*============================ DB saving/loading ============================ */
-
+//数据类型保存到文件
 static int rdbSaveType(FILE *fp, unsigned char type) {
     if (fwrite(&type,1,1,fp) == 0) return -1;
     return 0;
 }
-
+//时间辍保存到文件
 static int rdbSaveTime(FILE *fp, time_t t) {
     int32_t t32 = (int32_t) t;
     if (fwrite(&t32,4,1,fp) == 0) return -1;
     return 0;
 }
-
+//对不同长度uint32_t进行保存
 /* check rdbLoadLen() comments for more info */
 static int rdbSaveLen(FILE *fp, uint32_t len) {
     unsigned char buf[2];
@@ -1801,6 +1937,7 @@ static int rdbSaveLen(FILE *fp, uint32_t len) {
 /* String objects in the form "2391" "-100" without any space and with a
  * range of values that can fit in an 8, 16 or 32 bit signed value can be
  * encoded as integers to save space */
+ //用于尝试将一个字符串（SDS 类型，即 Redis 中的动态字符串）编码为一个整数，并确定其适合的整数编码类型（8位、16位、32位）
 static int rdbTryIntegerEncoding(sds s, unsigned char *enc) {
     long long value;
     char *endptr, buf[32];
@@ -1812,8 +1949,9 @@ static int rdbTryIntegerEncoding(sds s, unsigned char *enc) {
 
     /* If the number converted back into a string is not identical
      * then it's not possible to encode the string as integer */
+     //接下来，函数将转换得到的 value 再次转换回字符串，并与原 SDS 字符串进行比较。如果转换后的字符串长度与原 SDS 字符串长度不同，或者内容不完全一致，则返回 0
     if (strlen(buf) != sdslen(s) || memcmp(buf,s,sdslen(s))) return 0;
-
+    //在确认原字符串可以安全地解释为整数后，函数接下来检查这个整数是否适合用 8 位、16 位或 32 位整数来表示。
     /* Finally check if it fits in our ranges */
     if (value >= -(1<<7) && value <= (1<<7)-1) {
         enc[0] = (REDIS_RDB_ENCVAL<<6)|REDIS_RDB_ENC_INT8;
@@ -1835,7 +1973,7 @@ static int rdbTryIntegerEncoding(sds s, unsigned char *enc) {
         return 0;
     }
 }
-
+//用于将字符串对象（robj 类型的 obj）使用 LZF 压缩算法压缩后保存到文件中的函数。
 static int rdbSaveLzfStringObject(FILE *fp, robj *obj) {
     unsigned int comprlen, outlen;
     unsigned char byte;
@@ -1901,7 +2039,7 @@ static int rdbSave(char *filename) {
     dictIterator *di = NULL;
     dictEntry *de;
     FILE *fp;
-    char tmpfile[256];
+    char tmpfile[256];//先写入到临时的rdb文件中
     int j;
     time_t now = time(NULL);
 
@@ -1923,25 +2061,25 @@ static int rdbSave(char *filename) {
         }
 
         /* Write the SELECT DB opcode */
-        if (rdbSaveType(fp,REDIS_SELECTDB) == -1) goto werr;
-        if (rdbSaveLen(fp,j) == -1) goto werr;
+        if (rdbSaveType(fp,REDIS_SELECTDB) == -1) goto werr;//数据类型保存到文件
+        if (rdbSaveLen(fp,j) == -1) goto werr;//对不同大小的uint32_t进行保存
 
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
-            robj *key = dictGetEntryKey(de);
-            robj *o = dictGetEntryVal(de);
-            time_t expiretime = getExpire(db,key);
+            robj *key = dictGetEntryKey(de);//获取key
+            robj *o = dictGetEntryVal(de);//获取value
+            time_t expiretime = getExpire(db,key);//获得过期时间
 
             /* Save the expire time */
             if (expiretime != -1) {
                 /* If this key is already expired skip it */
-                if (expiretime < now) continue;
-                if (rdbSaveType(fp,REDIS_EXPIRETIME) == -1) goto werr;
-                if (rdbSaveTime(fp,expiretime) == -1) goto werr;
+                if (expiretime < now) continue;//过期，跳过
+                if (rdbSaveType(fp,REDIS_EXPIRETIME) == -1) goto werr;//保存类型
+                if (rdbSaveTime(fp,expiretime) == -1) goto werr;//保存时间
             }
             /* Save the key and associated value */
             if (rdbSaveType(fp,o->type) == -1) goto werr;
-            if (rdbSaveStringObject(fp,key) == -1) goto werr;
+            if (rdbSaveStringObject(fp,key) == -1) goto werr;//key是string类型的
             if (o->type == REDIS_STRING) {
                 /* Save a string value */
                 if (rdbSaveStringObject(fp,o) == -1) goto werr;
@@ -1950,14 +2088,14 @@ static int rdbSave(char *filename) {
                 list *list = o->ptr;
                 listNode *ln;
 
-                listRewind(list);
-                if (rdbSaveLen(fp,listLength(list)) == -1) goto werr;
+                listRewind(list);//将链表中的迭代器变为正向迭代器
+                if (rdbSaveLen(fp,listLength(list)) == -1) goto werr;//保存链表格式
                 while((ln = listYield(list))) {
                     robj *eleobj = listNodeValue(ln);
 
-                    if (rdbSaveStringObject(fp,eleobj) == -1) goto werr;
+                    if (rdbSaveStringObject(fp,eleobj) == -1) goto werr;//保存字符串
                 }
-            } else if (o->type == REDIS_SET) {
+            } else if (o->type == REDIS_SET) {//集合一个key对应多个value,key已经在上面保存过了
                 /* Save a set value */
                 dict *set = o->ptr;
                 dictIterator *di = dictGetIterator(set);
@@ -1975,10 +2113,10 @@ static int rdbSave(char *filename) {
                 assert(0 != 0);
             }
         }
-        dictReleaseIterator(di);
+        dictReleaseIterator(di);//释放迭代器
     }
     /* EOF opcode */
-    if (rdbSaveType(fp,REDIS_EOF) == -1) goto werr;
+    if (rdbSaveType(fp,REDIS_EOF) == -1) goto werr;//写结束符号
 
     /* Make sure data will not remain on the OS's output buffers */
     fflush(fp);
@@ -1987,7 +2125,7 @@ static int rdbSave(char *filename) {
 
     /* Use RENAME to make sure the DB file is changed atomically only
      * if the generate DB file is ok. */
-    if (rename(tmpfile,filename) == -1) {
+    if (rename(tmpfile,filename) == -1) {//替换名字
         redisLog(REDIS_WARNING,"Error moving temp DB file on the final destionation: %s", strerror(errno));
         unlink(tmpfile);
         return REDIS_ERR;
@@ -2008,7 +2146,7 @@ werr:
 static int rdbSaveBackground(char *filename) {
     pid_t childpid;
 
-    if (server.bgsaveinprogress) return REDIS_ERR;
+    if (server.bgsaveinprogress) return REDIS_ERR;//保存的过程中不能保存
     if ((childpid = fork()) == 0) {    //子进程中fork的返回值是0
         /* Child */
         close(server.fd);
@@ -2026,25 +2164,26 @@ static int rdbSaveBackground(char *filename) {
         }
         redisLog(REDIS_NOTICE,"Background saving started by pid %d",childpid);  //父进程中fork的返回值是子进程的PID
         server.bgsaveinprogress = 1;
-        server.bgsavechildpid = childpid;
+        server.bgsavechildpid = childpid;//子进程
         return REDIS_OK;
     }
     return REDIS_OK; /* unreached */
 }
-
+//如果子进程在创建临时文件后崩溃或由于某种原因未能正常完成其任务，那么父进程（或任何其他负责清理的进程）可能会调用这个函数来尝试删除那个临时文件。
+//然而，如果子进程在崩溃前已经将临时文件重命名为最终的 RDB 文件，那么调用 unlink 函数将不会删除任何文件，因为 unlink 只会删除指定路径名的文件，如果该文件不存在，则操作无效。
 static void rdbRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
 
     snprintf(tmpfile,256,"temp-%d.rdb", (int) childpid);
     unlink(tmpfile);
 }
-
+//读取类型
 static int rdbLoadType(FILE *fp) {
     unsigned char type;
     if (fread(&type,1,1,fp) == 0) return -1;
     return type;
 }
-
+//读取时间
 static time_t rdbLoadTime(FILE *fp) {
     int32_t t32;
     if (fread(&t32,4,1,fp) == 0) return -1;
@@ -2056,6 +2195,7 @@ static time_t rdbLoadTime(FILE *fp) {
  *
  * isencoded is set to 1 if the readed length is not actually a length but
  * an "encoding type", check the above comments for more info */
+ //如果
 static uint32_t rdbLoadLen(FILE *fp, int rdbver, int *isencoded) {
     unsigned char buf[2];
     uint32_t len;
@@ -2068,26 +2208,26 @@ static uint32_t rdbLoadLen(FILE *fp, int rdbver, int *isencoded) {
         int type;
 
         if (fread(buf,1,1,fp) == 0) return REDIS_RDB_LENERR;
-        type = (buf[0]&0xC0)>>6;
+        type = (buf[0]&0xC0)>>6;//buf[0]&11000000
         if (type == REDIS_RDB_6BITLEN) {
-            /* Read a 6 bit len */
+            /* Read a 6 bit len */ //00开头
             return buf[0]&0x3F;
-        } else if (type == REDIS_RDB_ENCVAL) {
+        } else if (type == REDIS_RDB_ENCVAL) {//11开头，此为而是“编码类型”type，这是因为，string被转化为int，现在要转化回去，并且string转化的int也分为6位，14位和32位，这个只是说明，下x的字节为string转化的int
             /* Read a 6 bit len encoding type */
             if (isencoded) *isencoded = 1;
             return buf[0]&0x3F;
         } else if (type == REDIS_RDB_14BITLEN) {
-            /* Read a 14 bit len */
+            /* Read a 14 bit len *///01开头
             if (fread(buf+1,1,1,fp) == 0) return REDIS_RDB_LENERR;
             return ((buf[0]&0x3F)<<8)|buf[1];
         } else {
-            /* Read a 32 bit len */
+            /* Read a 32 bit len *///10开头
             if (fread(&len,4,1,fp) == 0) return REDIS_RDB_LENERR;
             return ntohl(len);                      //网络序转主机序
         }
     }
 }
-
+//创建int类型变量
 static robj *rdbLoadIntegerObject(FILE *fp, int enctype) {
     unsigned char enc[4];
     long long val;
@@ -2111,7 +2251,7 @@ static robj *rdbLoadIntegerObject(FILE *fp, int enctype) {
     }
     return createObject(REDIS_STRING,sdscatprintf(sdsempty(),"%lld",val));
 }
-
+//创建字符串
 static robj *rdbLoadLzfStringObject(FILE*fp, int rdbver) {
     unsigned int len, clen;
     unsigned char *c = NULL;
@@ -2130,16 +2270,16 @@ err:
     sdsfree(val);
     return NULL;
 }
-
+//创建字符串robj，根据是否压缩然后判断保存为int还是string，如果没压缩则完全读取。
 static robj *rdbLoadStringObject(FILE*fp, int rdbver) {
     int isencoded;
     uint32_t len;
     sds val;
 
-    len = rdbLoadLen(fp,rdbver,&isencoded);
+    len = rdbLoadLen(fp,rdbver,&isencoded);//读取一个长度，如果isencoded=1说明下一个是string转化的int
     if (isencoded) {
         switch(len) {
-        case REDIS_RDB_ENC_INT8:
+        case REDIS_RDB_ENC_INT8://8 16 32都执行rdbLoadIntegerObject，因为没有break
         case REDIS_RDB_ENC_INT16:
         case REDIS_RDB_ENC_INT32:
             return tryObjectSharing(rdbLoadIntegerObject(fp,len));
@@ -2272,7 +2412,7 @@ static void authCommand(redisClient *c) {
       addReply(c,shared.err);
     }
 }
-
+//ping pong
 static void pingCommand(redisClient *c) {
     addReply(c,shared.pong);
 }
@@ -2286,10 +2426,10 @@ static void echoCommand(redisClient *c) {
 
 /*=================================== Strings =============================== */
 
-static void setGenericCommand(redisClient *c, int nx) {
+static void setGenericCommand(redisClient *c, int nx) {//nx为1,插入会失败
     int retval;
 
-    retval = dictAdd(c->db->dict,c->argv[1],c->argv[2]);
+    retval = dictAdd(c->db->dict,c->argv[1],c->argv[2]);//向Hash表中增加键值
     if (retval == DICT_ERR) {
         if (!nx) {
             dictReplace(c->db->dict,c->argv[1],c->argv[2]);
@@ -2306,11 +2446,11 @@ static void setGenericCommand(redisClient *c, int nx) {
     removeExpire(c->db,c->argv[1]);
     addReply(c, nx ? shared.cone : shared.ok);
 }
-
+//插入一个string 允许重复
 static void setCommand(redisClient *c) {
     setGenericCommand(c,0);
 }
-
+//插入一个string 不允许重复
 static void setnxCommand(redisClient *c) {
     setGenericCommand(c,1);
 }
@@ -2324,13 +2464,13 @@ static void getCommand(redisClient *c) {
         if (o->type != REDIS_STRING) {
             addReply(c,shared.wrongtypeerr);
         } else {
-            addReplySds(c,sdscatprintf(sdsempty(),"$%d\r\n",(int)sdslen(o->ptr)));
+            addReplySds(c,sdscatprintf(sdsempty(),"$%d\r\n",(int)sdslen(o->ptr)));//告诉接受长度
             addReply(c,o);
             addReply(c,shared.crlf);
         }
     }
 }
-
+//得到key保存的value，并更新
 static void getSetCommand(redisClient *c) {
     getCommand(c);
     if (dictAdd(c->db->dict,c->argv[1],c->argv[2]) == DICT_ERR) {
@@ -2342,7 +2482,7 @@ static void getSetCommand(redisClient *c) {
     server.dirty++;
     removeExpire(c->db,c->argv[1]);
 }
-
+//获取多个值
 static void mgetCommand(redisClient *c) {
     int j;
 
@@ -2362,7 +2502,7 @@ static void mgetCommand(redisClient *c) {
         }
     }
 }
-
+//增加 incr
 static void incrDecrCommand(redisClient *c, long long incr) {
     long long value;
     int retval;
@@ -2395,27 +2535,27 @@ static void incrDecrCommand(redisClient *c, long long incr) {
     addReply(c,o);
     addReply(c,shared.crlf);
 }
-
+//+1
 static void incrCommand(redisClient *c) {
     incrDecrCommand(c,1);
 }
-
+//-1
 static void decrCommand(redisClient *c) {
     incrDecrCommand(c,-1);
 }
-
+//增加 n
 static void incrbyCommand(redisClient *c) {
     long long incr = strtoll(c->argv[2]->ptr, NULL, 10);
     incrDecrCommand(c,incr);
 }
-
+// -n
 static void decrbyCommand(redisClient *c) {
     long long incr = strtoll(c->argv[2]->ptr, NULL, 10);
     incrDecrCommand(c,-incr);
 }
 
 /* ========================= Type agnostic commands ========================= */
-
+//删除
 static void delCommand(redisClient *c) {
     int deleted = 0, j;
 
@@ -2437,11 +2577,11 @@ static void delCommand(redisClient *c) {
         break;
     }
 }
-
+//存在
 static void existsCommand(redisClient *c) {
     addReply(c,lookupKeyRead(c->db,c->argv[1]) ? shared.cone : shared.czero);
 }
-
+//选择数据库
 static void selectCommand(redisClient *c) {
     int id = atoi(c->argv[1]->ptr);
 
@@ -2451,7 +2591,7 @@ static void selectCommand(redisClient *c) {
         addReply(c,shared.ok);
     }
 }
-
+//返回随机件
 static void randomkeyCommand(redisClient *c) {
     dictEntry *de;
 
@@ -2468,7 +2608,7 @@ static void randomkeyCommand(redisClient *c) {
         addReply(c,shared.crlf);
     }
 }
-
+//查找符合正则表达式的key
 static void keysCommand(redisClient *c) {
     dictIterator *di;
     dictEntry *de;
@@ -2500,17 +2640,17 @@ static void keysCommand(redisClient *c) {
     lenobj->ptr = sdscatprintf(sdsempty(),"$%lu\r\n",keyslen+(numkeys ? (numkeys-1) : 0));
     addReply(c,shared.crlf);
 }
-
+//数据库大小
 static void dbsizeCommand(redisClient *c) {
     addReplySds(c,
         sdscatprintf(sdsempty(),":%lu\r\n",dictSize(c->db->dict)));
 }
-
+//上一次存储时间
 static void lastsaveCommand(redisClient *c) {
     addReplySds(c,
         sdscatprintf(sdsempty(),":%lu\r\n",server.lastsave));
 }
-
+//查看key类型
 static void typeCommand(redisClient *c) {
     robj *o;
     char *type;
@@ -2529,7 +2669,7 @@ static void typeCommand(redisClient *c) {
     addReplySds(c,sdsnew(type));
     addReply(c,shared.crlf);
 }
-
+//保存rdb
 static void saveCommand(redisClient *c) {
     if (server.bgsaveinprogress) {
         addReplySds(c,sdsnew("-ERR background save in progress\r\n"));
@@ -2541,7 +2681,7 @@ static void saveCommand(redisClient *c) {
         addReply(c,shared.err);
     }
 }
-
+//新进程保存rdb
 static void bgsaveCommand(redisClient *c) {
     if (server.bgsaveinprogress) {
         addReplySds(c,sdsnew("-ERR background save already in progress\r\n"));
@@ -2553,7 +2693,7 @@ static void bgsaveCommand(redisClient *c) {
         addReply(c,shared.err);
     }
 }
-
+//关闭服务器
 static void shutdownCommand(redisClient *c) {
     redisLog(REDIS_WARNING,"User requested shutdown, saving DB...");
     /* Kill the saving child if there is a background saving in progress.
@@ -2570,7 +2710,7 @@ static void shutdownCommand(redisClient *c) {
             unlink(server.pidfile);
         redisLog(REDIS_WARNING,"%zu bytes used at exit",zmalloc_used_memory());
         redisLog(REDIS_WARNING,"Server exit now, bye bye...");
-        exit(1);
+        exit(1);//退出
     } else {
         /* Ooops.. error saving! The best we can do is to continue operating.
          * Note that if there was a background saving process, in the next
@@ -2580,7 +2720,7 @@ static void shutdownCommand(redisClient *c) {
         addReplySds(c,sdsnew("-ERR can't quit, problems saving the DB\r\n"));
     }
 }
-
+//重命名
 static void renameGenericCommand(redisClient *c, int nx) {
     robj *o;
 
@@ -2619,7 +2759,7 @@ static void renameCommand(redisClient *c) {
 static void renamenxCommand(redisClient *c) {
     renameGenericCommand(c,1);
 }
-
+//从当前库拿出一个key放到指定的库
 static void moveCommand(redisClient *c) {
     robj *o;
     redisDb *src, *dst;
@@ -2697,15 +2837,15 @@ static void pushGenericCommand(redisClient *c, int where) {
     server.dirty++;
     addReply(c,shared.ok);
 }
-
+//lpush
 static void lpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_HEAD);
 }
-
+//rpush
 static void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
 }
-
+//list长度
 static void llenCommand(redisClient *c) {
     robj *o;
     list *l;
@@ -2738,7 +2878,7 @@ static void lindexCommand(redisClient *c) {
             list *list = o->ptr;
             listNode *ln;
 
-            ln = listIndex(list, index);
+            ln = listIndex(list, index);//返回index位置的节点
             if (ln == NULL) {
                 addReply(c,shared.nullbulk);
             } else {
@@ -2750,7 +2890,7 @@ static void lindexCommand(redisClient *c) {
         }
     }
 }
-
+//Redis 列表的指定索引位置设置一个新元素。
 static void lsetCommand(redisClient *c) {
     robj *o;
     int index = atoi(c->argv[2]->ptr);
@@ -2772,7 +2912,7 @@ static void lsetCommand(redisClient *c) {
                 robj *ele = listNodeValue(ln);
 
                 decrRefCount(ele);
-                listNodeValue(ln) = c->argv[3];
+                listNodeValue(ln) = c->argv[3];//获取链表当前节点的值(注意此处获取的指针)
                 incrRefCount(c->argv[3]);
                 addReply(c,shared.ok);
                 server.dirty++;
@@ -2812,15 +2952,15 @@ static void popGenericCommand(redisClient *c, int where) {
         }
     }
 }
-
+//lpop
 static void lpopCommand(redisClient *c) {
     popGenericCommand(c,REDIS_HEAD);
 }
-
+//rpop
 static void rpopCommand(redisClient *c) {
     popGenericCommand(c,REDIS_TAIL);
 }
-
+//在list中获取下标left-right的值
 static void lrangeCommand(redisClient *c) {
     robj *o;
     int start = atoi(c->argv[2]->ptr);
@@ -2867,7 +3007,7 @@ static void lrangeCommand(redisClient *c) {
         }
     }
 }
-
+//用法 ltrim list num1 num2 只保留list num1-num2的内容
 static void ltrimCommand(redisClient *c) {
     robj *o;
     int start = atoi(c->argv[2]->ptr);
@@ -2916,7 +3056,9 @@ static void ltrimCommand(redisClient *c) {
         }
     }
 }
-
+//LREM key count value 用于根据参数移除列表中等于特定值的元素。
+//这个命令可以移除列表中所有等于某个值的元素，或者只移除前 N 个等于该值的元素。
+//count是负数则从后向前。
 static void lremCommand(redisClient *c) {
     robj *o;
 
@@ -2956,7 +3098,7 @@ static void lremCommand(redisClient *c) {
 }
 
 /* ==================================== Sets ================================ */
-
+//set中增加一个key
 static void saddCommand(redisClient *c) {
     robj *set;
 
@@ -2979,7 +3121,7 @@ static void saddCommand(redisClient *c) {
         addReply(c,shared.czero);
     }
 }
-
+//删除key
 static void sremCommand(redisClient *c) {
     robj *set;
 
@@ -3000,7 +3142,7 @@ static void sremCommand(redisClient *c) {
         }
     }
 }
-
+//将set a中元素x移到set b
 static void smoveCommand(redisClient *c) {
     robj *srcset, *dstset;
 
@@ -3035,7 +3177,7 @@ static void smoveCommand(redisClient *c) {
         incrRefCount(c->argv[3]);
     addReply(c,shared.cone);
 }
-
+//查看set a中是不是有元素x
 static void sismemberCommand(redisClient *c) {
     robj *set;
 
@@ -3053,7 +3195,7 @@ static void sismemberCommand(redisClient *c) {
             addReply(c,shared.czero);
     }
 }
-
+//求s的大小
 static void scardCommand(redisClient *c) {
     robj *o;
     dict *s;
@@ -3072,7 +3214,7 @@ static void scardCommand(redisClient *c) {
         }
     }
 }
-
+//SPOP命令用于从集合中随机移除一个元素
 static void spopCommand(redisClient *c) {
     robj *set;
     dictEntry *de;
@@ -3100,15 +3242,17 @@ static void spopCommand(redisClient *c) {
         }
     }
 }
-
+//比较函数
 static int qsortCompareSetsByCardinality(const void *s1, const void *s2) {
     dict **d1 = (void*) s1, **d2 = (void*) s2;
 
     return dictSize(*d1)-dictSize(*d2);
 }
-
+//这段代码实现了 Redis 中处理集合交集（SINTER）命令的通用逻辑，
+//它既可以用于计算多个集合的交集并将结果返回给客户端，也可以将结果存储到指定的键中。
+//该命令可以求多个set的交集
 static void sinterGenericCommand(redisClient *c, robj **setskeys, int setsnum, robj *dstkey) {
-    dict **dv = zmalloc(sizeof(dict*)*setsnum);
+    dict **dv = zmalloc(sizeof(dict*)*setsnum);//将多个集合储存在这个里面
     dictIterator *di;
     dictEntry *de;
     robj *lenobj = NULL, *dstset = NULL;
@@ -3321,14 +3465,14 @@ static void sdiffCommand(redisClient *c) {
 static void sdiffstoreCommand(redisClient *c) {
     sunionDiffGenericCommand(c,c->argv+2,c->argc-2,c->argv[1],REDIS_OP_DIFF);
 }
-
+//清空当前数据库
 static void flushdbCommand(redisClient *c) {
     server.dirty += dictSize(c->db->dict);
     dictEmpty(c->db->dict);
     dictEmpty(c->db->expires);
     addReply(c,shared.ok);
 }
-
+//清空所有数据库
 static void flushallCommand(redisClient *c) {
     server.dirty += emptyDb();
     addReply(c,shared.ok);
@@ -3384,11 +3528,13 @@ static robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst) {
 /* sortCompare() is used by qsort in sortCommand(). Given that qsort_r with
  * the additional parameter is not standard but a BSD-specific we have to
  * pass sorting parameters via the global 'server' structure */
+ //这段代码是一个用于Redis排序功能的比较函数，它根据Redis服务器的配置（如是否按字母顺序排序、是否按模式排序等）
+ //来比较两个元素（redisSortObject 结构体），并返回一个整数来表示这两个元素之间的顺序关系。
 static int sortCompare(const void *s1, const void *s2) {
     const redisSortObject *so1 = s1, *so2 = s2;
     int cmp;
 
-    if (!server.sort_alpha) {
+    if (!server.sort_alpha) {//不按照字母排序
         /* Numeric sorting. Here it's trivial as we precomputed scores */
         if (so1->u.score > so2->u.score) {
             cmp = 1;
@@ -3399,7 +3545,7 @@ static int sortCompare(const void *s1, const void *s2) {
         }
     } else {
         /* Alphanumeric sorting */
-        if (server.sort_bypattern) {
+        if (server.sort_bypattern) {//按照模式排序
             if (!so1->u.cmpobj || !so2->u.cmpobj) {
                 /* At least one compare object is NULL */
                 if (so1->u.cmpobj == so2->u.cmpobj)
@@ -3410,7 +3556,7 @@ static int sortCompare(const void *s1, const void *s2) {
                     cmp = 1;
             } else {
                 /* We have both the objects, use strcoll */
-                cmp = strcoll(so1->u.cmpobj->ptr,so2->u.cmpobj->ptr);
+                cmp = strcoll(so1->u.cmpobj->ptr,so2->u.cmpobj->ptr);//用来排序
             }
         } else {
             /* Compare elements directly */
@@ -3471,7 +3617,7 @@ static void sortCommand(redisClient *c) {
             sortby = c->argv[j+1];
             /* If the BY pattern does not contain '*', i.e. it is constant,
              * we don't need to sort nor to lookup the weight keys. */
-            if (strchr(c->argv[j+1]->ptr,'*') == NULL) dontsort = 1;
+            if (strchr(c->argv[j+1]->ptr,'*') == NULL) dontsort = 1;//strchr 函数是 C 语言标准库中的一个函数，用于在一个字符串中查找第一次出现的指定字符。
             j++;
         } else if (!strcasecmp(c->argv[j]->ptr,"get") && leftargs >= 1) {
             listAddNodeTail(operations,createSortOperation(
@@ -3617,7 +3763,7 @@ static void sortCommand(redisClient *c) {
     }
     zfree(vector);
 }
-
+//打印一些日志
 static void infoCommand(redisClient *c) {
     sds info;
     time_t uptime = time(NULL)-server.stat_starttime;
@@ -3688,6 +3834,7 @@ static void monitorCommand(redisClient *c) {
 }
 
 /* ================================= Expire ================================= */
+//删除expire
 static int removeExpire(redisDb *db, robj *key) {
     if (dictDelete(db->expires,key) == DICT_OK) {
         return 1;
@@ -3695,7 +3842,7 @@ static int removeExpire(redisDb *db, robj *key) {
         return 0;
     }
 }
-
+//设置expire
 static int setExpire(redisDb *db, robj *key, time_t when) {
     if (dictAdd(db->expires,key,(void*)when) == DICT_ERR) {
         return 0;
@@ -3707,6 +3854,7 @@ static int setExpire(redisDb *db, robj *key, time_t when) {
 
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
+ //获得过期时间
 static time_t getExpire(redisDb *db, robj *key) {
     dictEntry *de;
 
@@ -3733,7 +3881,8 @@ static int expireIfNeeded(redisDb *db, robj *key) {
     dictDelete(db->expires,key);
     return dictDelete(db->dict,key) == DICT_OK;
 }
-
+//deleteIfVolatile 函数是 Redis 中的一个函数，用于检查并删除具有过期时间的键
+//（即“易失”键）。如果键存在且已过期，则该函数会将其从数据库中删除。
 static int deleteIfVolatile(redisDb *db, robj *key) {
     dictEntry *de;
 
@@ -3746,7 +3895,7 @@ static int deleteIfVolatile(redisDb *db, robj *key) {
     dictDelete(db->expires,key);
     return dictDelete(db->dict,key) == DICT_OK;
 }
-
+//增加过期时间
 static void expireCommand(redisClient *c) {
     dictEntry *de;
     int seconds = atoi(c->argv[2]->ptr);
@@ -3770,7 +3919,7 @@ static void expireCommand(redisClient *c) {
         return;
     }
 }
-
+//返回过期时间
 static void ttlCommand(redisClient *c) {
     time_t expire;
     int ttl = -1;
@@ -3784,7 +3933,7 @@ static void ttlCommand(redisClient *c) {
 }
 
 /* =============================== Replication  ============================= */
-
+//在规定时间内读
 static int syncWrite(int fd, char *ptr, ssize_t size, int timeout) {
     ssize_t nwritten, ret = size;
     time_t start = time(NULL);
@@ -3804,7 +3953,7 @@ static int syncWrite(int fd, char *ptr, ssize_t size, int timeout) {
     }
     return ret;
 }
-
+//在规定时间内写
 static int syncRead(int fd, char *ptr, ssize_t size, int timeout) {
     ssize_t nread, totread = 0;
     time_t start = time(NULL);
@@ -3825,7 +3974,7 @@ static int syncRead(int fd, char *ptr, ssize_t size, int timeout) {
     }
     return totread;
 }
-
+//读取一行
 static int syncReadLine(int fd, char *ptr, ssize_t size, int timeout) {
     ssize_t nread = 0;
 
@@ -3846,7 +3995,7 @@ static int syncReadLine(int fd, char *ptr, ssize_t size, int timeout) {
     }
     return nread;
 }
-
+//进行主从同步
 static void syncCommand(redisClient *c) {
     /* ignore SYNC if aleady slave or in monitor mode */
     if (c->flags & REDIS_SLAVE) return;
@@ -3855,15 +4004,16 @@ static void syncCommand(redisClient *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other slaves if needed. */
+    //检查发送列表是否还有数据没发送
     if (listLength(c->reply) != 0) {
         addReplySds(c,sdsnew("-ERR SYNC is invalid with pending input\r\n"));
         return;
     }
-
+    //从属设备请求同步
     redisLog(REDIS_NOTICE,"Slave ask for synchronization");
     /* Here we need to check if there is a background saving operation
      * in progress, or if it is required to start one */
-    if (server.bgsaveinprogress) {
+    if (server.bgsaveinprogress) {//如果已经有一个后台保存操作在进行中，函数会检查是否有其他从服务器已经在等待这个 BGSAVE 操作的结束以获取差异数据。
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another slave that is
          * registering differences since the server forked to save */
@@ -3871,25 +4021,25 @@ static void syncCommand(redisClient *c) {
         listNode *ln;
 
         listRewind(server.slaves);
-        while((ln = listYield(server.slaves))) {
+        while((ln = listYield(server.slaves))) {//函数会检查是否有其他从服务器已经在等待这个 BGSAVE 操作的结束以获取差异数据。
             slave = ln->value;
             if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_END) break;
         }
-        if (ln) {
+        if (ln) {//如果有，那么当前从服务器将共享这个差异数据列表
             /* Perfect, the server is already registering differences for
              * another slave. Set the right state, and copy the buffer. */
-            listRelease(c->reply);
-            c->reply = listDup(slave->reply);
+            listRelease(c->reply);//释放链表
+            c->reply = listDup(slave->reply);//复制从表的回复链表
             if (!c->reply) oom("listDup copying slave reply list");
             c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
             redisLog(REDIS_NOTICE,"Waiting for end of BGSAVE for SYNC");
-        } else {
+        } else {//如果没有其他从服务器在等待，那么当前从服务器的 replstate 将被设置为 REDIS_REPL_WAIT_BGSAVE_START，表示它将等待下一个 BGSAVE 操作开始。
             /* No way, we need to wait for the next BGSAVE in order to
              * register differences */
             c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
             redisLog(REDIS_NOTICE,"Waiting for next BGSAVE for SYNC");
         }
-    } else {
+    } else {//如果没有后台保存操作正在进行，则启动一个新的 BGSAVE 操作，并将从服务器的 replstate 设置为 REDIS_REPL_WAIT_BGSAVE_END。
         /* Ok we don't have a BGSAVE in progress, let's start one */
         redisLog(REDIS_NOTICE,"Starting BGSAVE for SYNC");
         if (rdbSaveBackground(server.dbfilename) != REDIS_OK) {
@@ -3899,10 +4049,10 @@ static void syncCommand(redisClient *c) {
         }
         c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
     }
-    c->repldbfd = -1;
+    c->repldbfd = -1;//复制数据库文件描述符
     c->flags |= REDIS_SLAVE;
-    c->slaveseldb = 0;
-    if (!listAddNodeTail(server.slaves,c)) oom("listAddNodeTail");
+    c->slaveseldb = 0;//如果这个客户端是一个从服务器，这个字段存储了它选择的数据库 ID。这个值在主从复制过程中用于同步数据。
+    if (!listAddNodeTail(server.slaves,c)) oom("listAddNodeTail");//加入从服务器列表
     return;
 }
 
@@ -3912,8 +4062,8 @@ static void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(mask);
     char buf[REDIS_IOBUF_LEN];
     ssize_t nwritten, buflen;
-
-    if (slave->repldboff == 0) {
+    //第一次同步
+    if (slave->repldboff == 0) {//复制数据库文件的当前偏移量。在从服务器读取主服务器发送的数据时，这个值会不断更新，以指示已经读取了多少数据。
         /* Write the bulk write count before to transfer the DB. In theory here
          * we don't know how much room there is in the output buffer of the
          * socket, but in pratice SO_SNDLOWAT (the minimum count for output
@@ -3930,6 +4080,7 @@ static void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         sdsfree(bulkcount);
     }
+    //从slave->repldbfd读取偏移量slave->repldboff的数据
     lseek(slave->repldbfd,slave->repldboff,SEEK_SET);
     buflen = read(slave->repldbfd,buf,REDIS_IOBUF_LEN);
     if (buflen <= 0) {
@@ -3938,20 +4089,23 @@ static void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
         freeClient(slave);
         return;
     }
+    //发送数据
     if ((nwritten = write(fd,buf,buflen)) == -1) {
         redisLog(REDIS_DEBUG,"Write error sending DB to slave: %s",
             strerror(errno));
         freeClient(slave);
         return;
     }
+    //偏移量增加
     slave->repldboff += nwritten;
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
+        //调用该函数之前，已经注册进select了，所以现在去掉。
         aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
         slave->replstate = REDIS_REPL_ONLINE;
         if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE,
-            sendReplyToClient, slave, NULL) == AE_ERR) {
+            sendReplyToClient, slave) == AE_ERR) {
             freeClient(slave);
             return;
         }
@@ -3966,6 +4120,7 @@ static void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
  *
  * The goal of this function is to handle slaves waiting for a successful
  * background saving in order to perform non-blocking synchronization. */
+ //在定时任务中，bgsave结束后会调用此函数，说明rdb快照保存成功，现在注册可写事件，把数据库发送出去
 static void updateSlavesWaitingBgsave(int bgsaveerr) {
     listNode *ln;
     int startbgsave = 0;
@@ -3995,13 +4150,14 @@ static void updateSlavesWaitingBgsave(int bgsaveerr) {
             slave->repldbsize = buf.st_size;
             slave->replstate = REDIS_REPL_SEND_BULK;
             aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
-            if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave, NULL) == AE_ERR) {
+            if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
                 freeClient(slave);
                 continue;
             }
         }
     }
-    if (startbgsave) {
+    if (startbgsave) {//REDIS_REPL_WAIT_BGSAVE_START要等待下一次rdb保存，现在保存
+    //如果rdb保存失败，则关闭所有REDIS_REPL_WAIT_BGSAVE_START状态的从服务器
         if (rdbSaveBackground(server.dbfilename) != REDIS_OK) {
             listRewind(server.slaves);
             redisLog(REDIS_WARNING,"SYNC failed. BGSAVE failed");
@@ -4014,7 +4170,7 @@ static void updateSlavesWaitingBgsave(int bgsaveerr) {
         }
     }
 }
-
+//从主服务器接收数据库的快照（dump）文件，并将其加载到当前Redis服务器的数据库中，以完成与主服务器的数据同步。
 static int syncWithMaster(void) {
     char buf[1024], tmpfile[256];
     int dumpsize;
@@ -4027,6 +4183,7 @@ static int syncWithMaster(void) {
         return REDIS_ERR;
     }
     /* Issue the SYNC command */
+    //发送SYNC
     if (syncWrite(fd,"SYNC \r\n",7,5) == -1) {
         close(fd);
         redisLog(REDIS_WARNING,"I/O error writing to MASTER: %s",
@@ -4034,6 +4191,7 @@ static int syncWithMaster(void) {
         return REDIS_ERR;
     }
     /* Read the bulk write count */
+    //读取长度
     if (syncReadLine(fd,buf,1024,3600) == -1) {
         close(fd);
         redisLog(REDIS_WARNING,"I/O error reading bulk count from MASTER: %s",
@@ -4077,7 +4235,9 @@ static int syncWithMaster(void) {
         close(fd);
         return REDIS_ERR;
     }
+    //清空数据库
     emptyDb();
+    //读取rdb
     if (rdbLoad(server.dbfilename) != REDIS_OK) {
         redisLog(REDIS_WARNING,"Failed trying to load the MASTER synchronization DB from disk");
         close(fd);
@@ -4088,7 +4248,7 @@ static int syncWithMaster(void) {
     server.replstate = REDIS_REPL_CONNECTED;
     return REDIS_OK;
 }
-
+//成为一个服务器的从服务器
 static void slaveofCommand(redisClient *c) {
     if (!strcasecmp(c->argv[1]->ptr,"no") &&
         !strcasecmp(c->argv[2]->ptr,"one")) {
@@ -4123,17 +4283,17 @@ static void slaveofCommand(redisClient *c) {
  * It is not possible to free enough memory to reach used-memory < maxmemory
  * the server will start refusing commands that will enlarge even more the
  * memory usage.
- */
+ *///释放内存，如果超过了最大限制
 static void freeMemoryIfNeeded(void) {
     while (server.maxmemory && zmalloc_used_memory() > server.maxmemory) {
-        if (listLength(server.objfreelist)) {
+        if (listLength(server.objfreelist)) {//从objfreelist中删除
             robj *o;
 
             listNode *head = listFirst(server.objfreelist);
             o = listNodeValue(head);
             listDelNode(server.objfreelist,head);
             zfree(o);
-        } else {
+        } else {//删除过期健
             int j, k, freed = 0;
 
             for (j = 0; j < server.dbnum; j++) {
@@ -4164,9 +4324,9 @@ static void freeMemoryIfNeeded(void) {
 }
 
 /* ================================= Debugging ============================== */
-
+//debug
 static void debugCommand(redisClient *c) {
-    if (!strcasecmp(c->argv[1]->ptr,"segfault")) {
+    if (!strcasecmp(c->argv[1]->ptr,"segfault")) {//使程序崩溃
         *((char*)-1) = 'x';
     } else if (!strcasecmp(c->argv[1]->ptr,"object") && c->argc == 3) {
         dictEntry *de = dictFind(c->db->dict,c->argv[2]);
@@ -4276,7 +4436,7 @@ static struct redisFunctionSym symsTable[] = {
 {"rdbRemoveTempFile", (unsigned long)rdbRemoveTempFile},
 {NULL,0}
 };
-
+//此函数尝试将指针转换为函数名。
 /* This function try to convert a pointer into a function name. It's used in
  * oreder to provide a backtrace under segmentation fault that's able to
  * display functions declared as static (otherwise the backtrace is useless). */
@@ -4322,7 +4482,8 @@ static void *getMcontextEip(ucontext_t *uc) {
     return NULL;
 #endif
 }
-
+//它是一个信号处理函数，用于处理 Redis 服务器中发生的段错误信号。
+//该函数通过捕获信号信息、记录服务器的当前状态、生成并打印堆栈跟踪信息，以及最后优雅地退出程序来工作
 static void segvHandler(int sig, siginfo_t *info, void *secret) {
     void *trace[100];
     char **messages = NULL;
@@ -4379,7 +4540,7 @@ static void segvHandler(int sig, siginfo_t *info, void *secret) {
     free(messages);
     exit(0);
 }
-
+//为几个关键的信号（段错误、总线错误、浮点异常和非法指令）设置信号处理函数。
 static void setupSigSegvAction(void) {
     struct sigaction act;
 
@@ -4403,6 +4564,8 @@ static void setupSigSegvAction(void) {
 /* =================================== Main! ================================ */
 
 #ifdef __linux__
+//这个函数 linuxOvercommitMemoryValue 的目的是读取 Linux 系统中的 /proc/sys/vm/overcommit_memory 文件的内容，该文件包含了内存超额提交（overcommit）策略的值。
+//超额提交是指系统允许分配的内存总量超过物理内存和交换空间（swap space）的总和。这个函数将读取到的值转换为整数并返回。
 int linuxOvercommitMemoryValue(void) {
     FILE *fp = fopen("/proc/sys/vm/overcommit_memory","r");
     char buf[64];
@@ -4429,12 +4592,16 @@ static void daemonize(void) {
     FILE *fp;
 
     if (fork() != 0) exit(0); /* parent exits */
+    //调用setsid()函数创建一个新的会话，并成为该会话的会话首进程（session leader）。这会导致进程脱离控制终端，并成为一个新的进程组的组长。
+    //这是守护进程化的一个重要步骤，因为它确保了进程不会接收到任何来自终端的信号。
     setsid(); /* create a new session */
 
     /* Every output goes to /dev/null. If Redis is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
      * it will not log at all. */
     if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
+        //使用dup2()函数将标准输入（STDIN_FILENO）、标准输出（STDOUT_FILENO）和标准错误（STDERR_FILENO）
+        //都重定向到/dev/null。这样，守护进程就不会产生任何输出到终端或日志文件
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
         dup2(fd, STDERR_FILENO);
@@ -4449,7 +4616,7 @@ static void daemonize(void) {
 }
 
 int main(int argc, char **argv) {
-    initServerConfig();
+    initServerConfig();//初始化config
     if (argc == 2) {
         ResetServerSaveParams();
         loadServerConfig(argv[1]);
@@ -4468,7 +4635,7 @@ int main(int argc, char **argv) {
     if (rdbLoad(server.dbfilename) == REDIS_OK)
         redisLog(REDIS_NOTICE,"DB loaded from disk");
     if (aeCreateFileEvent(server.el, server.fd, AE_READABLE,
-        acceptHandler, NULL, NULL) == AE_ERR) oom("creating file event");
+        acceptHandler, NULL) == AE_ERR) oom("creating file event");
     redisLog(REDIS_NOTICE,"The server is now ready to accept connections on port %d", server.port);
     aeMain(server.el);
     aeDeleteEventLoop(server.el);

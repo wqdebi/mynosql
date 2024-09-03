@@ -21,10 +21,15 @@ typedef struct dictEntry {
  * 函数指针
  */
 typedef struct dictType {
+    //计算哈希
     unsigned int (*hashFunction)(const void *key);
+    //复制建
     void *(*keyDup)(void *privdata, const void *key);
+    //复制职
     void *(*valDup)(void *privdata, const void *obj);
+    //对比
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
+    //销毁
     void (*keyDestructor)(void *privdata, void *key);
     void (*valDestructor)(void *privdata, void *obj);
 } dictType;
@@ -65,6 +70,9 @@ typedef struct dictIterator {
 //如果存在ht->type->valDup函数时，将调用该指针所指向的函数
 //否则的话会直接调用进行值拷贝
 /*为什么要加上do-while循环可以参考我的个人博客www.yanyulin.info*/
+//宏定义if else时需要使用do-while循环，否则该宏在额外的if-else语句中
+//使用的时候，如果使用了"dictSetHashVal(ht, entry, _val_)；"
+//则会导致if-else语句中的else出错，因为拥有两个分号
 #define dictSetHashVal(ht, entry, _val_) do { \
     if ((ht)->type->valDup) \
         entry->val = (ht)->type->valDup((ht)->privdata, _val_); \
